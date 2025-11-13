@@ -199,6 +199,7 @@ def build_futures_maps(executor: ThreadPoolExecutor) -> Dict[str, Dict[str, Dict
             exchange_prices[base] = {
                 "price": float(sell_price),
                 "funding_rate": funding_value,
+                "symbol": symbol,
             }
         maps[cfg.exchange_id] = exchange_prices
     return maps
@@ -228,7 +229,9 @@ def identify_contango(
                 if pct < min_spread_pct:
                     continue
                 funding_rate = payload.get("funding_rate")
-                if funding_rate is not None and funding_rate < -0.0001:
+                if funding_rate is None:
+                    continue
+                if funding_rate < 0:
                     continue
                 spot_fee = SPOT_FEES.get(spot_id, 0.0)
                 fut_fee = FUTURES_FEES.get(futures_id, 0.0)
@@ -246,6 +249,7 @@ def identify_contango(
                         "futures_price": futures_price,
                         "spread": spread,
                         "pct": pct,
+                        "futures_symbol": payload.get("symbol"),
                         "funding_rate": funding_rate,
                         "net_pct": net_pct,
                         "net_pct_minus_0_2": net_after_0_2,
