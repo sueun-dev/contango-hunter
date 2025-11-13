@@ -147,6 +147,7 @@ async def contango_loop(
     min_pct: float,
     top_n: int,
     run_once: bool,
+    clear_screen: bool,
 ):
     await asyncio.sleep(1.0)
     while True:
@@ -168,6 +169,8 @@ async def contango_loop(
                 )
             )
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        if clear_screen:
+            print("\033[2J\033[H", end="")
         if not spot_sources:
             print(f"\n[{timestamp}] Waiting for spot data...")
         elif not futures_streams:
@@ -195,6 +198,11 @@ async def main():
     parser.add_argument("--no-upbit", action="store_true", help="Disable Upbit spot source.")
     parser.add_argument("--no-bithumb", action="store_true", help="Disable Bithumb spot source.")
     parser.add_argument("--once", action="store_true", help="Run a single evaluation and exit.")
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear the terminal before printing each refresh.",
+    )
     args = parser.parse_args()
 
     futures_selection = {name.strip() for name in args.futures.split(",") if name.strip()}
@@ -260,6 +268,7 @@ async def main():
             args.min_pct,
             args.top,
             args.once,
+            args.clear,
         )
     finally:
         for task in tasks:

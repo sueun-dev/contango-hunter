@@ -14,7 +14,7 @@
 
 ```bash
 # REST 기반 모니터
-python3 contango_monitor.py --interval 10 --min-pct 0.1 --top 10
+python3 contango_monitor.py --interval 10 --min-pct 0.1 --top 10 --clear
 
 # OKX WebSocket 기반 모니터
 python3 okx_ws_monitor.py --interval 2 --min-pct 0.2 --top 5
@@ -32,5 +32,5 @@ python3 upbit_ws_spot.py --interval 2 --top 20
 python3 bithumb_ws_spot.py --interval 2 --top 20
 
 # 통합 WebSocket 콘탱고 엔진
-python3 ws_contango_engine.py --interval 2 --min-pct 0.2 --top 10 --futures okx,gate,hyper
+python3 ws_contango_engine.py --interval 2 --min-pct 0.2 --top 10 --futures okx,gate,hyper --clear
 ```
