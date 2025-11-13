@@ -209,6 +209,7 @@ def identify_contango(
     spot_maps: Dict[str, Dict[str, Dict[str, float]]],
     futures_maps: Dict[str, Dict[str, Dict[str, float]]],
     min_spread_pct: float,
+    require_nonnegative_funding: bool = True,
 ) -> List[Dict[str, float]]:
     rows = []
     for spot_id, spot_payload in spot_maps.items():
@@ -231,7 +232,7 @@ def identify_contango(
                 funding_rate = payload.get("funding_rate")
                 if funding_rate is None:
                     continue
-                if funding_rate < 0:
+                if require_nonnegative_funding and funding_rate < 0:
                     continue
                 spot_fee = SPOT_FEES.get(spot_id, 0.0)
                 fut_fee = FUTURES_FEES.get(futures_id, 0.0)

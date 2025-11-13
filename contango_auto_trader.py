@@ -23,8 +23,9 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from typing import Dict, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Optional, List
+import json
 
 import ccxt
 
@@ -32,6 +33,7 @@ import contango_monitor as monitor
 
 TRANCHE_USD = 50.0
 MAX_PER_LEG_USD = 2000.0
+LOG_FILE = "trade_cycles.jsonl"
 
 
 @dataclass
@@ -42,29 +44,84 @@ class HedgePosition:
     futures_symbol: str
     spot_symbol: str
     notional_usd: float = 0.0
+    tranches: List[dict] = field(default_factory=list)
 
     @property
     def remaining_capacity(self) -> float:
         return max(0.0, MAX_PER_LEG_USD - self.notional_usd)
 
-    def add_tranche(self, usd: float):
-        self.notional_usd = min(MAX_PER_LEG_USD, self.notional_usd + usd)
+    def record_entry(self, usd: float, opportunity: dict):
+        usd_added = min(usd, self.remaining_capacity)
+        if usd_added <= 0:
+            return 0.0
+        self.tranches.append(
+            {
+                "usd": usd_added,
+                "futures_price": opportunity["futures_price"],
+                "spot_price": opportunity["spot_price"],
+                "timestamp": time.time(),
+            }
+        )
+        self.notional_usd += usd_added
+        return usd_added
 
-    def remove_tranche(self, usd: float):
-        self.notional_usd = max(0.0, self.notional_usd - usd)
+    def record_exit(self, usd: float, exit_data: dict):
+        usd_target = min(usd, self.notional_usd)
+        if usd_target <= 0:
+            return 0.0, 0.0, []
+        usd_remaining = usd_target
+        pnl_total = 0.0
+        details = []
+        exit_fut = exit_data["futures_price"]
+        exit_spot = exit_data["spot_price"]
+        while usd_remaining > 1e-9 and self.tranches:
+            tranche = self.tranches[0]
+            available = tranche["usd"]
+            portion = min(usd_remaining, available)
+            qty = portion / tranche["futures_price"]
+            pnl = qty * (
+                (tranche["futures_price"] - exit_fut)
+                + (exit_spot - tranche["spot_price"])
+            )
+            details.append(
+                {
+                    "portion_usd": portion,
+                    "qty": qty,
+                    "entry_futures_price": tranche["futures_price"],
+                    "entry_spot_price": tranche["spot_price"],
+                    "entry_timestamp": tranche["timestamp"],
+                    "exit_futures_price": exit_fut,
+                    "exit_spot_price": exit_spot,
+                    "exit_timestamp": time.time(),
+                    "pnl_usd": pnl,
+                }
+            )
+            pnl_total += pnl
+            tranche["usd"] -= portion
+            usd_remaining -= portion
+            if tranche["usd"] <= 1e-9:
+                self.tranches.pop(0)
+        actual_closed = usd_target - usd_remaining
+        self.notional_usd = max(0.0, self.notional_usd - actual_closed)
+        return actual_closed, pnl_total, details
 
 
 def fetch_rows(min_pct: float) -> list[dict]:
     with ThreadPoolExecutor(max_workers=len(monitor.SPOT_CONFIGS) + len(monitor.FUTURES_CONFIGS)) as executor:
         spot_maps = monitor.build_spot_usd_maps(executor)
         futures_maps = monitor.build_futures_maps(executor)
-        rows = monitor.identify_contango(spot_maps, futures_maps, min_spread_pct=min_pct)
+        rows = monitor.identify_contango(
+            spot_maps,
+            futures_maps,
+            min_spread_pct=min_pct,
+            require_nonnegative_funding=False,
+        )
     return rows
 
 
 def pick_best(rows: list[dict], entry_threshold: float) -> Optional[dict]:
     for row in rows:
-        if row["pct"] >= entry_threshold:
+        if row["pct"] >= entry_threshold and row.get("funding_rate") is not None and row["funding_rate"] >= 0:
             return row
     return None
 
@@ -132,9 +189,10 @@ def execute_tranche(
             f"buy {position.spot_exchange} {position.spot_symbol}"
         )
         if dry_run:
-            return
-        place_market_order(futures_client, position.futures_symbol, "sell", qty)
-        place_market_order(spot_client, position.spot_symbol, "buy", qty)
+            return {"qty": qty, "usd_amount": usd_amount, "mode": "DRY_RUN"}
+        fut_order = place_market_order(futures_client, position.futures_symbol, "sell", qty)
+        spot_order = place_market_order(spot_client, position.spot_symbol, "buy", qty)
+        return {"qty": qty, "usd_amount": usd_amount, "futures_order": fut_order, "spot_order": spot_order}
     elif action == "close":
         print(
             f"Closing {usd_amount:.2f} USD tranche ({qty:.6f} {position.base}): "
@@ -142,11 +200,22 @@ def execute_tranche(
             f"sell spot at {position.spot_exchange}"
         )
         if dry_run:
-            return
-        place_market_order(futures_client, position.futures_symbol, "buy", qty)
-        place_market_order(spot_client, position.spot_symbol, "sell", qty)
+            return {"qty": qty, "usd_amount": usd_amount, "mode": "DRY_RUN"}
+        fut_order = place_market_order(futures_client, position.futures_symbol, "buy", qty)
+        spot_order = place_market_order(spot_client, position.spot_symbol, "sell", qty)
+        return {"qty": qty, "usd_amount": usd_amount, "futures_order": fut_order, "spot_order": spot_order}
     else:
         raise ValueError("Invalid action.")
+
+
+def log_event(event: str, payload: dict):
+    record = {"event": event, "timestamp": time.time()}
+    record.update(payload)
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        print(f"Warning: failed to write log {exc}")
 
 
 def auto_trade_loop(args):
@@ -176,9 +245,23 @@ def auto_trade_loop(args):
         # Entry logic
         if best:
             position = ensure_position(best, positions)
-            if position.remaining_capacity >= TRANCHE_USD and best["pct"] >= args.entry_threshold:
-                execute_tranche(position, best, TRANCHE_USD, "open", dry_run)
-                position.add_tranche(TRANCHE_USD)
+            usd_to_add = min(TRANCHE_USD, position.remaining_capacity)
+            if usd_to_add > 0 and best["pct"] >= args.entry_threshold:
+                execution = execute_tranche(position, best, usd_to_add, "open", dry_run)
+                recorded = position.record_entry(usd_to_add, best)
+                log_event(
+                    "entry",
+                    {
+                        "base": best["base"],
+                        "spot_exchange": best["spot_exchange"],
+                        "futures_exchange": best["exchange"],
+                        "usd": recorded,
+                        "spread_pct": best["pct"],
+                        "net_pct": best["net_pct"],
+                        "funding_rate": best["funding_rate"],
+                        "execution": execution,
+                    },
+                )
 
         # Exit logic for every open position
         for key, pos in list(positions.items()):
@@ -192,10 +275,26 @@ def auto_trade_loop(args):
                 the_pos = positions.pop(key)
                 continue
             if current["pct"] <= args.exit_threshold and pos.notional_usd > 0:
-                usd_to_close = min(TRANCHE_USD, pos.notional_usd)
-                execute_tranche(pos, current, usd_to_close, "close", dry_run)
-                pos.remove_tranche(usd_to_close)
-                if pos.notional_usd <= 0.0:
+                usd_request = min(TRANCHE_USD, pos.notional_usd)
+                closed_usd, pnl_usd, details = pos.record_exit(usd_request, current)
+                if closed_usd > 0:
+                    execution = execute_tranche(pos, current, closed_usd, "close", dry_run)
+                    log_event(
+                        "exit",
+                        {
+                            "base": pos.base,
+                            "spot_exchange": pos.spot_exchange,
+                            "futures_exchange": pos.futures_exchange,
+                            "usd": closed_usd,
+                            "spread_pct": current["pct"],
+                            "net_pct": current["net_pct"],
+                            "funding_rate": current["funding_rate"],
+                            "pnl_usd": pnl_usd,
+                            "portions": details,
+                            "execution": execution,
+                        },
+                    )
+                if pos.notional_usd <= 1e-9:
                     positions.pop(key, None)
 
         time.sleep(args.interval)

@@ -75,3 +75,7 @@ export $(grep -v '^#' .env | xargs)
 ## Disclaimer
 
 This repository is provided for research purposes only. You are responsible for all trading decisions, API key management, and risk controls. Always validate strategies in dry-run environments before going live.***
+
+
+## Short term
+python3 contango_auto_trader.py --entry-threshold 1.0 --exit-threshold 0.2 --interval 5 --live
