@@ -324,11 +324,11 @@ def main():
                     spot_maps = build_spot_usd_maps(executor)
                     futures_maps = build_futures_maps(executor)
                     rows = identify_contango(spot_maps, futures_maps, args.min_pct)
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-                if args.clear:
-                    print("\033[2J\033[H", end="")
-                print(f"\n[{timestamp}] Top contango spreads (min {args.min_pct:.3f}%):")
-                print(render_opportunities(rows, args.top))
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    if args.clear:
+                        print("\033[2J\033[H", end="")
+                    print(f"\n[{timestamp}] Top contango spreads (min {args.min_pct:.3f}%):")
+                    print(render_opportunities(rows, args.top))
                 except (ContangoError, ccxt.BaseError) as exc:
                     print(f"Error while computing contango: {exc}", file=sys.stderr)
                 if args.once:
