@@ -7,6 +7,7 @@
 - `gate_ws_monitor.py`: Gate.io USDT 무기한 선물을 WebSocket으로 모니터링.
 - `hyperliquid_ws_monitor.py`: Hyperliquid perp 마켓을 WebSocket으로 모니터링.
 - `upbit_ws_spot.py`: Upbit KRW 스팟 호가를 WebSocket으로 스트리밍해 USD 환산 가격을 출력.
+- `bithumb_ws_spot.py`: Bithumb KRW 스팟 호가를 WebSocket으로 스트리밍.
 
 ## Usage
 
@@ -25,4 +26,7 @@ python3 hyperliquid_ws_monitor.py --interval 2 --min-pct 0.2 --top 5
 
 # Upbit WebSocket 기반 KRW 스팟 스트림
 python3 upbit_ws_spot.py --interval 2 --top 20
+
+# Bithumb WebSocket 기반 KRW 스팟 스트림
+python3 bithumb_ws_spot.py --interval 2 --top 20
 ```
